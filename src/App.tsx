@@ -15,7 +15,11 @@ function App() {
     const setupCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 640, height: 480 },
+          video: { 
+            width: 640, 
+            height: 480,
+            facingMode: "environment"
+          },
         });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -124,8 +128,7 @@ function App() {
             left: 0,
             width: '100%',
             height: '100%',
-            objectFit: 'cover',
-            transform: 'scaleX(-1)'
+            objectFit: 'cover'
           }}
         />
         <canvas
@@ -137,7 +140,6 @@ function App() {
             width: '100%',
             height: '100%',
             objectFit: 'cover',
-            transform: 'scaleX(-1)',
             pointerEvents: 'none'
           }}
         />
