@@ -1,71 +1,73 @@
-import { useEffect, useRef, useState } from "react";
-import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
+import { useEffect, useRef, useState, useCallback } from "react";
 import type { PoseLandmarkerResult } from "@mediapipe/tasks-vision";
 
-export const usePoseLandmarker = () => {
+export interface PoseLandmarkerOptions {
+  numPoses?: number;
+  minPoseDetectionConfidence?: number;
+  minPosePresenceConfidence?: number;
+  minTrackingConfidence?: number;
+}
+
+interface UsePoseLandmarkerProps {
+  options?: PoseLandmarkerOptions;
+  onResults?: (results: PoseLandmarkerResult | null, timestamp: number) => void;
+}
+
+export const usePoseLandmarker = ({ options, onResults }: UsePoseLandmarkerProps = {}) => {
   const [isReady, setIsReady] = useState(false);
-  const poseLandmarkerRef = useRef<PoseLandmarker | null>(null);
+  const workerRef = useRef<Worker | null>(null);
+  
+  // Keep latest callback in a ref to prevent unnecessary effect re-runs
+  const onResultsRef = useRef(onResults);
+  useEffect(() => {
+    onResultsRef.current = onResults;
+  }, [onResults]);
 
   useEffect(() => {
-    let active = true;
+    const worker = new Worker(new URL('../workers/poseWorker.ts', import.meta.url), {
+      type: 'module'
+    });
 
-    const initializePoseLandmarker = async () => {
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-        );
-
-        if (!active) return;
-
-        const landmarker = await PoseLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "/pose_landmarker_full.task",
-            delegate: "GPU",
-          },
-          runningMode: "VIDEO",
-          numPoses: 1,
-          minPoseDetectionConfidence: 0.7,
-          minPosePresenceConfidence: 0.7,
-          minTrackingConfidence: 0.7,
-        });
-
-        if (!active) {
-          landmarker.close();
-          return;
-        }
-
-        poseLandmarkerRef.current = landmarker;
+    worker.onmessage = (e) => {
+      const { type, results, timestamp } = e.data;
+      if (type === "READY") {
         setIsReady(true);
-      } catch (error) {
-        console.error("Error initializing Pose Landmarker:", error);
+      } else if (type === "RESULTS") {
+        if (onResultsRef.current) {
+          onResultsRef.current(results, timestamp);
+        }
       }
     };
 
-    initializePoseLandmarker();
+    // Send initialization options
+    worker.postMessage({ type: "INIT", options: options || {} });
+
+    workerRef.current = worker;
 
     return () => {
-      active = false;
-      if (poseLandmarkerRef.current) {
-        poseLandmarkerRef.current.close();
-      }
+      worker.postMessage({ type: "CLOSE" });
+      worker.terminate();
     };
-  }, []);
+  }, []); // Run once. Dynamic option updates should be handled via setOptions if needed.
 
-  const detectPose = (
-    videoElement: HTMLVideoElement,
-    timestamp: number
-  ): PoseLandmarkerResult | null => {
-    if (!poseLandmarkerRef.current || !isReady) {
-      return null;
+  const setOptions = useCallback((newOptions: PoseLandmarkerOptions) => {
+    if (workerRef.current && isReady) {
+      workerRef.current.postMessage({ type: "SET_OPTIONS", options: newOptions });
     }
-    
+  }, [isReady]);
+
+  const detectPose = useCallback(async (videoElement: HTMLVideoElement, timestamp: number) => {
+    if (!workerRef.current || !isReady) return;
     try {
-      return poseLandmarkerRef.current.detectForVideo(videoElement, timestamp);
+      const imageBitmap = await createImageBitmap(videoElement);
+      workerRef.current.postMessage(
+        { type: "DETECT", image: imageBitmap, timestamp }, 
+        [imageBitmap] // Transfer ownership to worker for zero-copy
+      );
     } catch (error) {
-      console.error("Error detecting pose:", error);
-      return null;
+      console.error("Error creating ImageBitmap for worker:", error);
     }
-  };
+  }, [isReady]);
 
-  return { detectPose, isReady };
+  return { detectPose, isReady, setOptions };
 };

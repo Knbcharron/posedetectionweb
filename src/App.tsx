@@ -1,14 +1,55 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { DrawingUtils, PoseLandmarker } from "@mediapipe/tasks-vision";
+import type { PoseLandmarkerResult } from "@mediapipe/tasks-vision";
 import { usePoseLandmarker } from "./hooks/usePoseLandmarker";
 
 function App() {
-  const { detectPose, isReady } = usePoseLandmarker();
-  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
+  const drawingUtilsRef = useRef<DrawingUtils | null>(null);
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
+
+  // Async callback from the WebWorker
+  const handlePoseResults = useCallback((results: PoseLandmarkerResult | null) => {
+    if (!canvasRef.current || !videoRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    const ctx = canvas.getContext("2d");
+    
+    // Ensure canvas dimensions exactly match video dimensions
+    if (canvas.width !== video.videoWidth) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+
+    if (ctx) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (!drawingUtilsRef.current) {
+        drawingUtilsRef.current = new DrawingUtils(ctx);
+      }
+      
+      const drawingUtils = drawingUtilsRef.current;
+
+      // Draw skeleton if landmarks are detected
+      if (results && results.landmarks) {
+        for (const landmarks of results.landmarks) {
+          drawingUtils.drawLandmarks(landmarks, {
+            radius: (data) => DrawingUtils.lerp(data.from!.z, -0.15, 0.1, 5, 1),
+            color: "#FF0000",
+          });
+          drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
+            color: "#00FF00",
+            lineWidth: 3,
+          });
+        }
+      }
+    }
+  }, []);
+
+  const { detectPose, isReady } = usePoseLandmarker({ onResults: handlePoseResults });
 
   // Setup camera stream
   useEffect(() => {
@@ -41,65 +82,25 @@ function App() {
     };
   }, []);
 
-  // Main rendering loop
+  // Main capture loop - offloads processing to the WebWorker
   useEffect(() => {
     let lastVideoTime = -1;
-    let drawingUtils: DrawingUtils | null = null;
 
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext("2d");
-      if (ctx) {
-        drawingUtils = new DrawingUtils(ctx);
-      }
-    }
-
-    const renderLoop = () => {
-      if (
-        isReady &&
-        videoRef.current &&
-        videoRef.current.readyState >= 2 &&
-        canvasRef.current &&
-        drawingUtils
-      ) {
+    const captureLoop = () => {
+      if (isReady && videoRef.current && videoRef.current.readyState >= 2) {
         const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext("2d");
-        
-        // Ensure canvas dimensions match video dimensions
-        if (canvas.width !== video.videoWidth) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-        }
-
-        // Only detect when video frame changes
+        // Only process when a new frame is available
         if (video.currentTime !== lastVideoTime) {
           lastVideoTime = video.currentTime;
-          const results = detectPose(video, performance.now());
-
-          if (ctx) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            // Draw skeleton if landmarks are detected
-            if (results && results.landmarks) {
-              for (const landmarks of results.landmarks) {
-                drawingUtils.drawLandmarks(landmarks, {
-                  radius: (data) => DrawingUtils.lerp(data.from!.z, -0.15, 0.1, 5, 1),
-                  color: "#FF0000",
-                });
-                drawingUtils.drawConnectors(landmarks, PoseLandmarker.POSE_CONNECTIONS, {
-                  color: "#00FF00",
-                  lineWidth: 3,
-                });
-              }
-            }
-          }
+          // Send to worker. The drawing happens in the handlePoseResults callback
+          detectPose(video, performance.now());
         }
       }
-      requestRef.current = requestAnimationFrame(renderLoop);
+      requestRef.current = requestAnimationFrame(captureLoop);
     };
 
     if (isReady) {
-      requestRef.current = requestAnimationFrame(renderLoop);
+      requestRef.current = requestAnimationFrame(captureLoop);
     }
 
     return () => {
@@ -111,7 +112,7 @@ function App() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', backgroundColor: '#000' }}>
-      {!isReady && <p style={{ color: 'white', zIndex: 10 }}>Loading High-Accuracy Pose Model...</p>}
+      {!isReady && <p style={{ color: 'white', zIndex: 10 }}>Loading Background Worker...</p>}
       
       {hasCameraPermission === false && (
         <p style={{ color: 'red', zIndex: 10 }}>Camera access denied. Please grant permissions to use this app.</p>
