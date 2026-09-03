@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 import type { PoseLandmarkerResult } from "@mediapipe/tasks-vision";
 
-export const usePoseLandmarker = () => {
+export const usePoseLandmarker = (numPoses: number = 4) => {
   const [isReady, setIsReady] = useState(false);
   const poseLandmarkerRef = useRef<PoseLandmarker | null>(null);
 
@@ -23,7 +23,7 @@ export const usePoseLandmarker = () => {
             delegate: "GPU",
           },
           runningMode: "VIDEO",
-          numPoses: 1,
+          numPoses: numPoses,
           minPoseDetectionConfidence: 0.7,
           minPosePresenceConfidence: 0.7,
           minTrackingConfidence: 0.7,
@@ -51,7 +51,7 @@ export const usePoseLandmarker = () => {
     };
   }, []);
 
-  const detectPose = (
+  const detectPose = useCallback((
     videoElement: HTMLVideoElement,
     timestamp: number
   ): PoseLandmarkerResult | null => {
@@ -65,7 +65,7 @@ export const usePoseLandmarker = () => {
       console.error("Error detecting pose:", error);
       return null;
     }
-  };
+  }, [isReady]);
 
   return { detectPose, isReady };
 };
