@@ -61,8 +61,9 @@ function App() {
   const [metrics, setMetrics] = useState({
     avgFps: 0,
     avgLatency: 0,
-    totalProcessed: 0,
-    successfulDetections: 0
+    dropRate: 0,
+    successRate: 0,
+    totalProcessed: 0
   });
 
   // Main rendering loop
@@ -72,6 +73,7 @@ function App() {
     // Metrics state (cumulative)
     const stats = {
       startTime: 0,
+      baseTotalFrames: 0,
       processedFrames: 0,
       successfulDetections: 0,
       latencies: [] as number[],
@@ -101,6 +103,9 @@ function App() {
         // Initialize stats
         if (stats.startTime === 0) {
           stats.startTime = now;
+          if (video.getVideoPlaybackQuality) {
+            stats.baseTotalFrames = video.getVideoPlaybackQuality().totalVideoFrames;
+          }
         }
 
         // Only detect when video frame changes
@@ -170,6 +175,14 @@ function App() {
         if (now - stats.lastUiUpdateTime > 500) {
           stats.lastUiUpdateTime = now;
           
+          let totalFrames = stats.processedFrames;
+          if (video.getVideoPlaybackQuality) {
+            totalFrames = Math.max(stats.processedFrames, video.getVideoPlaybackQuality().totalVideoFrames - stats.baseTotalFrames);
+          }
+          
+          const droppedFrames = totalFrames - stats.processedFrames;
+          const dropRate = totalFrames > 0 ? (droppedFrames / totalFrames) * 100 : 0;
+          
           const durationSec = (now - stats.startTime) / 1000;
           const avgFps = durationSec > 0 ? stats.processedFrames / durationSec : 0;
           
@@ -179,11 +192,16 @@ function App() {
             avgLatency = sum / stats.latencies.length;
           }
 
+          const successRate = stats.processedFrames > 0 
+            ? (stats.successfulDetections / stats.processedFrames) * 100 
+            : 0;
+
           setMetrics({
             avgFps,
             avgLatency,
-            totalProcessed: stats.processedFrames,
-            successfulDetections: stats.successfulDetections
+            dropRate,
+            successRate,
+            totalProcessed: stats.processedFrames
           });
         }
       }
@@ -258,8 +276,8 @@ function App() {
             <h3 style={{ margin: '0 0 10px 0', color: '#00ff00' }}>YOLOv8 Performance Stats</h3>
             <div style={{ margin: '5px 0' }}>Avg FPS: {metrics.avgFps.toFixed(1)}</div>
             <div style={{ margin: '5px 0' }}>Avg Latency (E2E): {metrics.avgLatency.toFixed(1)} ms</div>
-            <div style={{ margin: '5px 0' }}>Frames Processed: {metrics.totalProcessed}</div>
-            <div style={{ margin: '5px 0' }}>Detections: {metrics.successfulDetections}</div>
+            <div style={{ margin: '5px 0' }}>Avg Drop Frame: {metrics.dropRate.toFixed(1)}%</div>
+            <div style={{ margin: '5px 0' }}>Avg Success Rate: {metrics.successRate.toFixed(1)}%</div>
           </div>
         )}
       </div>
